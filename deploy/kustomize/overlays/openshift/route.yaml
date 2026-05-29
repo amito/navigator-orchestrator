@@ -1,0 +1,21 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: navigator-orchestrator
+  # Namespace hardcoded because kustomize doesn't recognize Route as a namespaced
+  # CRD. If you change the app namespace, update this value too.
+  namespace: navigator-orchestrator
+  labels:
+    app.kubernetes.io/name: navigator-orchestrator
+    app.kubernetes.io/component: route
+spec:
+  to:
+    kind: Service
+    name: navigator-orchestrator
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

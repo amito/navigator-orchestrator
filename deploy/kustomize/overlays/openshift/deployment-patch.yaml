@@ -1,0 +1,12 @@
+- op: replace
+  path: /spec/template/spec/containers/0/image
+  value: ghcr.io/amito/navigator-orchestrator:latest
+- op: replace
+  path: /spec/template/spec/containers/0/imagePullPolicy
+  value: Always
+- op: remove
+  path: /spec/template/spec/securityContext/runAsUser
+- op: remove
+  path: /spec/template/spec/securityContext/runAsGroup
+- op: remove
+  path: /spec/template/spec/securityContext/fsGroup
