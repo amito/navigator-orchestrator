@@ -27,6 +27,9 @@ class OrchestratorServer:
         self._registry = registry
 
     async def handle_list_tools(self) -> list[types.Tool]:
+        # Attempt lazy discovery if rhoai-mcp wasn't available at startup
+        await self._passthrough.ensure_discovered()
+
         tools: list[types.Tool] = []
 
         # Workflow start tools — one per registered workflow

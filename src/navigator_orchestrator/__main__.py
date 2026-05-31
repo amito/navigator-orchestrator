@@ -27,10 +27,9 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     settings = Settings()
 
-    # 1. Connect to rhoai-mcp
+    # 1. Create MCP client (connects lazily on first tool call)
     mcp_client = RhoaiMCPClient(settings.rhoai_mcp_url)
-    await mcp_client.connect()
-    logger.info("Connected to rhoai-mcp at %s", settings.rhoai_mcp_url)
+    logger.info("rhoai-mcp configured at %s (will connect on demand)", settings.rhoai_mcp_url)
 
     # 2. Build workflow registry and engine
     registry = WorkflowRegistry()
@@ -40,12 +39,10 @@ async def main() -> None:
     builder = build_model_recommendation(mcp_client)
     engine.register_graph(WORKFLOW_NAME, builder)
 
-    # 3. Discover passthrough tools (exclude workflow-covered names)
+    # 3. Set up passthrough (discovers lazily via ensure_discovered)
     workflow_tool_names = {f"start_{n}" for n in registry.names()}
     workflow_tool_names |= {"resume_workflow", "cancel_workflow", "list_workflows"}
     passthrough = ToolPassthrough(mcp_client, exclude_names=workflow_tool_names)
-    await passthrough.discover()
-    logger.info("Discovered %d passthrough tools", len(passthrough.tool_names()))
 
     # 4. Wire up orchestrator server
     orchestrator = OrchestratorServer(engine, passthrough, registry)
@@ -65,6 +62,9 @@ async def main() -> None:
         return result  # type: ignore[return-value]
 
     # 6. Run with Streamable HTTP transport
+    import contextlib
+    from collections.abc import AsyncIterator
+
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
     session_manager = StreamableHTTPSessionManager(app=mcp_server)
@@ -72,11 +72,15 @@ async def main() -> None:
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
-    async def shutdown() -> None:
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        async with session_manager.run():
+            yield
         await mcp_client.disconnect()
 
     app = Starlette(
         routes=[Mount("/mcp", app=session_manager.handle_request)],
+        lifespan=lifespan,
     )
 
     import uvicorn
