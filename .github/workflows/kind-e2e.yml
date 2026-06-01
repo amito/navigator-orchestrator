@@ -1,0 +1,104 @@
+name: Kind E2E
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/**"
+      - "src/**"
+      - "Makefile"
+      - "Containerfile"
+      - ".github/workflows/kind-e2e.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "deploy/**"
+      - "src/**"
+      - "Makefile"
+      - "Containerfile"
+      - ".github/workflows/kind-e2e.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kind-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install Kind
+        run: |
+          curl -sLo ./kind "https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64"
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+
+      - name: Install kustomize
+        run: |
+          curl -sL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.6.0/kustomize_v5.6.0_linux_amd64.tar.gz" | \
+            tar xz -C /usr/local/bin
+          kustomize version
+
+      - name: Validate Kustomize overlays
+        run: |
+          kustomize build deploy/kustomize/overlays/kind > /dev/null
+          echo "Kind overlay: OK"
+          kustomize build deploy/kustomize/overlays/openshift > /dev/null
+          echo "OpenShift overlay: OK"
+
+      - name: Create Kind cluster
+        run: |
+          kind create cluster --name navigator-orchestrator
+          kubectl cluster-info
+
+      - name: Build and load image
+        run: |
+          docker build -f Containerfile -t navigator-orchestrator:latest .
+          kind load docker-image navigator-orchestrator:latest --name navigator-orchestrator
+
+      - name: Deploy to Kind
+        run: |
+          kustomize build deploy/kustomize/overlays/kind | kubectl apply -f -
+          kubectl rollout status deployment/navigator-orchestrator -n navigator-orchestrator --timeout=120s
+
+      - name: Wait for pod ready
+        run: kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=navigator-orchestrator -n navigator-orchestrator --timeout=120s
+
+      - name: Verify MCP server is reachable
+        run: |
+          NODE_PORT=$(kubectl get svc navigator-orchestrator -n navigator-orchestrator -o jsonpath='{.spec.ports[0].nodePort}')
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"e2e-test","version":"0.1.0"}}}' \
+            "http://localhost:${NODE_PORT}/mcp" || true)
+          if [ "$HTTP_CODE" -gt 0 ] 2>/dev/null; then
+            echo "MCP server is reachable (HTTP $HTTP_CODE)"
+          else
+            echo "ERROR: MCP server is not reachable"
+            exit 1
+          fi
+
+      - name: Collect debug info on failure
+        if: failure()
+        run: |
+          echo "=== Pods ==="
+          kubectl get pods -A
+          echo ""
+          echo "=== Orchestrator logs ==="
+          kubectl logs -l app.kubernetes.io/name=navigator-orchestrator -n navigator-orchestrator --tail=50 || true
+          echo ""
+          echo "=== Events ==="
+          kubectl get events -n navigator-orchestrator --sort-by='.lastTimestamp' | tail -20 || true
+
+      - name: Tear down
+        if: always()
+        run: kind delete cluster --name navigator-orchestrator
