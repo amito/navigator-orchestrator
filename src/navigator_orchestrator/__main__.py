@@ -65,16 +65,26 @@ async def main() -> None:
         result = await orchestrator.handle_call_tool(name, arguments)
         return result  # type: ignore[return-value]
 
-    # 6. Run with Streamable HTTP transport
+    # 6. Set up transports (Streamable HTTP + SSE)
     import contextlib
     from collections.abc import AsyncIterator
 
+    from mcp.server.sse import SseServerTransport
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from starlette.routing import Mount, Route
 
     session_manager = StreamableHTTPSessionManager(app=mcp_server)
+    sse_transport = SseServerTransport("/sse/messages/")
 
-    from starlette.applications import Starlette
-    from starlette.routing import Mount
+    async def handle_sse(request: Request) -> Response:
+        async with sse_transport.connect_sse(
+            request.scope, request.receive, request._send
+        ) as streams:
+            await mcp_server.run(streams[0], streams[1], mcp_server.create_initialization_options())
+        return Response()
 
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
@@ -96,7 +106,11 @@ async def main() -> None:
             await self.app(scope, receive, send)
 
     app = Starlette(
-        routes=[Mount("/mcp", app=session_manager.handle_request)],
+        routes=[
+            Route("/sse", endpoint=handle_sse),
+            Mount("/sse/messages/", app=sse_transport.handle_post_message),
+            Mount("/mcp", app=session_manager.handle_request),
+        ],
         lifespan=lifespan,
     )
     app = AuthTokenMiddleware(app)
