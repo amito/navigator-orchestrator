@@ -8,6 +8,7 @@ import logging
 from mcp.server.lowlevel import Server
 import mcp.types as types
 
+from navigator_orchestrator.auth import auth_token_var, extract_bearer_token
 from navigator_orchestrator.config import Settings
 from navigator_orchestrator.mcp_client import RhoaiMCPClient
 from navigator_orchestrator.passthrough import ToolPassthrough
@@ -33,7 +34,9 @@ async def main() -> None:
 
     # 2. Build workflow registry and engine
     registry = WorkflowRegistry()
-    registry.register(WORKFLOW_NAME, build_model_recommendation, WORKFLOW_DESCRIPTION, WORKFLOW_STEPS)
+    registry.register(
+        WORKFLOW_NAME, build_model_recommendation, WORKFLOW_DESCRIPTION, WORKFLOW_STEPS
+    )
 
     engine = WorkflowEngine()
     builder = build_model_recommendation(mcp_client)
@@ -56,7 +59,8 @@ async def main() -> None:
 
     @mcp_server.call_tool()
     async def call_tool(
-        name: str, arguments: dict,  # type: ignore[type-arg]
+        name: str,
+        arguments: dict,  # type: ignore[type-arg]
     ) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
         result = await orchestrator.handle_call_tool(name, arguments)
         return result  # type: ignore[return-value]
@@ -78,10 +82,24 @@ async def main() -> None:
             yield
         await mcp_client.disconnect()
 
+    class AuthTokenMiddleware:
+        """ASGI middleware that captures the Bearer token from incoming requests."""
+
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http":
+                headers = dict(scope.get("headers", []))
+                raw = headers.get(b"authorization", b"").decode()
+                auth_token_var.set(extract_bearer_token(raw))
+            await self.app(scope, receive, send)
+
     app = Starlette(
         routes=[Mount("/mcp", app=session_manager.handle_request)],
         lifespan=lifespan,
     )
+    app = AuthTokenMiddleware(app)
 
     import uvicorn
 

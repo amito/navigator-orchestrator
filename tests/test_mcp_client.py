@@ -17,8 +17,9 @@ async def test_list_tools():
     mock_tools_result.tools = [mock_tool]
     mock_session.list_tools = AsyncMock(return_value=mock_tools_result)
 
-    client = RhoaiMCPClient.__new__(RhoaiMCPClient)
+    client = RhoaiMCPClient("http://fake")
     client._session = mock_session
+    client._connected_token = None
 
     tools = await client.list_tools()
     assert len(tools) == 1
@@ -35,8 +36,9 @@ async def test_call_tool():
     mock_session = AsyncMock()
     mock_session.call_tool = AsyncMock(return_value=mock_result)
 
-    client = RhoaiMCPClient.__new__(RhoaiMCPClient)
+    client = RhoaiMCPClient("http://fake")
     client._session = mock_session
+    client._connected_token = None
 
     result = await client.call_tool("create_project", {"name": "test"})
     mock_session.call_tool.assert_called_once_with("create_project", {"name": "test"})
@@ -53,8 +55,9 @@ async def test_call_tool_error():
     mock_session = AsyncMock()
     mock_session.call_tool = AsyncMock(return_value=mock_result)
 
-    client = RhoaiMCPClient.__new__(RhoaiMCPClient)
+    client = RhoaiMCPClient("http://fake")
     client._session = mock_session
+    client._connected_token = None
 
     with pytest.raises(RuntimeError, match="Permission denied"):
         await client.call_tool("create_project", {"name": "test"})
